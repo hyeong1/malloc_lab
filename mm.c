@@ -75,6 +75,7 @@ static void *find_fit(size_t asize);
 static void place(void *ptr, size_t asize);
 
 static char *heap_listp; // 항상 prologue 블록을 가리킨다.
+static void *nextptr;
 
 /* 
  * mm_init - initialize the malloc package. 힙 초기화
@@ -88,6 +89,7 @@ int mm_init(void)
     PUT(heap_listp + (2*WSIZE), PACK(DSIZE, 1)); /* Prologue footer -PACK(block size, alloc)*/
     PUT(heap_listp + (3*WSIZE), PACK(0, 1));     /* Epilogue header -end*/
     heap_listp += (2*WSIZE);
+    nextptr = heap_listp; // next-fit 구현
 
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL)
         return -1;
@@ -179,19 +181,49 @@ static void *coalesce(void *ptr) // 가용 메모리 연결
         PUT(FTRP(NEXT_BLKP(ptr)), PACK(size, 0));
         ptr = PREV_BLKP(ptr);
     }
+    nextptr = ptr;
     return ptr;
 }
 
 static void *find_fit(size_t asize)
 {
     // first-fit
+    // void *ptr;
+    // for (ptr = heap_listp; GET_SIZE(HDRP(ptr)) > 0; ptr = NEXT_BLKP(ptr)) {
+    //     if (!GET_ALLOC(HDRP(ptr)) && (asize <= GET_SIZE(HDRP(ptr)))) {
+    //         return ptr;
+    //     }
+    // }
+
+    // next-fit
+    // void *ptr;
+    // for (ptr = nextptr; GET_SIZE(HDRP(ptr)); ptr = NEXT_BLKP(nextptr)) {
+    //     if (GET_SIZE(HDRP(nextptr)) == 0) { // 힙 영역 끝에 도달하면
+    //         nextptr = heap_listp; // 다시 처음부터
+    //         continue;
+    //     }
+    //     if (!GET_ALLOC(HDRP(ptr)) && (asize <= GET_SIZE(HDRP(ptr)))) {
+    //         nextptr = ptr;
+    //         return ptr;
+    //     }
+    // }
+
+    // void *ptr = nextptr;
+    // while (!GET_ALLOC(HDRP(ptr)) && (asize <= GET_SIZE(HDRP(ptr)))) {
+    //     if (GET_SIZE(HDRP(ptr)) == 0) { // 힙 영역 끝에 도달하면
+    //         ptr = heap_listp; // 다시 처음부터
+    //         continue;
+    //     }
+    //     ptr = NEXT_BLKP(ptr); 
+    // }
+
     void *ptr;
-    for (ptr = heap_listp; GET_SIZE(HDRP(ptr)) > 0; ptr = NEXT_BLKP(ptr)) {
+    for (ptr = nextptr; GET_SIZE(HDRP(ptr)) > 0; ptr = NEXT_BLKP(ptr)) {
         if (!GET_ALLOC(HDRP(ptr)) && (asize <= GET_SIZE(HDRP(ptr)))) {
+            nextptr = ptr;
             return ptr;
         }
     }
-
     return NULL;
 }
 
