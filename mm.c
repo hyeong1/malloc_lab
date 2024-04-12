@@ -195,28 +195,6 @@ static void *find_fit(size_t asize)
     //     }
     // }
 
-    // next-fit
-    // void *ptr;
-    // for (ptr = nextptr; GET_SIZE(HDRP(ptr)); ptr = NEXT_BLKP(nextptr)) {
-    //     if (GET_SIZE(HDRP(nextptr)) == 0) { // 힙 영역 끝에 도달하면
-    //         nextptr = heap_listp; // 다시 처음부터
-    //         continue;
-    //     }
-    //     if (!GET_ALLOC(HDRP(ptr)) && (asize <= GET_SIZE(HDRP(ptr)))) {
-    //         nextptr = ptr;
-    //         return ptr;
-    //     }
-    // }
-
-    // void *ptr = nextptr;
-    // while (!GET_ALLOC(HDRP(ptr)) && (asize <= GET_SIZE(HDRP(ptr)))) {
-    //     if (GET_SIZE(HDRP(ptr)) == 0) { // 힙 영역 끝에 도달하면
-    //         ptr = heap_listp; // 다시 처음부터
-    //         continue;
-    //     }
-    //     ptr = NEXT_BLKP(ptr); 
-    // }
-
     void *ptr;
     for (ptr = nextptr; GET_SIZE(HDRP(ptr)) > 0; ptr = NEXT_BLKP(ptr)) {
         if (!GET_ALLOC(HDRP(ptr)) && (asize <= GET_SIZE(HDRP(ptr)))) {
