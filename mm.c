@@ -207,6 +207,15 @@ static void *next_fit(size_t asize)
             return ptr;
         }
     }
+
+    ptr = heap_listp; // epilogue를 만나면 다시 처음부터 탐색
+    while (ptr < nextptr) {
+        ptr = NEXT_BLKP(ptr);
+        if (!GET_ALLOC(HDRP(ptr)) && (asize <= GET_SIZE(HDRP(ptr)))) {
+            nextptr = ptr;
+            return ptr;
+        }
+    }
     return NULL;
 }
 
@@ -261,17 +270,3 @@ void *mm_realloc(void *ptr, size_t size)
     mm_free(oldptr);
     return newptr;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
