@@ -71,7 +71,9 @@ team_t team = {
 
 static void *extend_heap(size_t words);
 static void *coalesce(void *ptr);
-static void *find_fit(size_t asize);
+static void *first_fit(size_t asize);
+static void *next_fit(size_t asize);
+static void *best_fit(size_t asize);
 static void place(void *ptr, size_t asize);
 
 static char *heap_listp; // 항상 prologue 블록을 가리킨다.
@@ -131,7 +133,7 @@ void *mm_malloc(size_t size)
     else
         asize = DSIZE * ((size + (DSIZE) + (DSIZE-1)) / DSIZE); 
     
-    if ((ptr = find_fit(asize)) != NULL) {
+    if ((ptr = next_fit(asize)) != NULL) {
         place(ptr, asize); /* 요청 블록 배치 */
         return ptr;
     }
@@ -185,16 +187,19 @@ static void *coalesce(void *ptr) // 가용 메모리 연결
     return ptr;
 }
 
-static void *find_fit(size_t asize)
+static void *first_fit(size_t asize) 
 {
-    // first-fit
-    // void *ptr;
-    // for (ptr = heap_listp; GET_SIZE(HDRP(ptr)) > 0; ptr = NEXT_BLKP(ptr)) {
-    //     if (!GET_ALLOC(HDRP(ptr)) && (asize <= GET_SIZE(HDRP(ptr)))) {
-    //         return ptr;
-    //     }
-    // }
+    void *ptr;
+    for (ptr = heap_listp; GET_SIZE(HDRP(ptr)) > 0; ptr = NEXT_BLKP(ptr)) {
+        if (!GET_ALLOC(HDRP(ptr)) && (asize <= GET_SIZE(HDRP(ptr)))) {
+            return ptr;
+        }
+    }
+    return NULL;
+}
 
+static void *next_fit(size_t asize) 
+{
     void *ptr;
     for (ptr = nextptr; GET_SIZE(HDRP(ptr)) > 0; ptr = NEXT_BLKP(ptr)) {
         if (!GET_ALLOC(HDRP(ptr)) && (asize <= GET_SIZE(HDRP(ptr)))) {
@@ -205,7 +210,23 @@ static void *find_fit(size_t asize)
     return NULL;
 }
 
-static void place(void * ptr, size_t asize) {
+static void *best_fit(size_t asize) 
+{
+    void *ptr;
+    void *fitptr = NULL;
+    for (ptr = heap_listp; GET_SIZE(HDRP(ptr)) > 0; ptr = NEXT_BLKP(ptr)) {
+        if (!GET_ALLOC(HDRP(ptr)) &&(asize <= GET_SIZE(HDRP(ptr)))) {
+            if (fitptr == NULL)
+                fitptr = ptr;
+            else
+                fitptr = GET_SIZE(ptr) < GET_SIZE(fitptr) ? ptr : fitptr;
+        }
+    }
+    return fitptr;
+}
+
+static void place(void * ptr, size_t asize)
+{
     size_t csize = GET_SIZE(HDRP(ptr)); /* 현재 가용 블록의 크기 */
 
     if ((csize - asize) >= (2*DSIZE)) { /* 남은 공간이 최소 블록 크기 이상일 때 */
