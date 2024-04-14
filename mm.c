@@ -71,27 +71,42 @@ team_t team = {
 
 static void *extend_heap(size_t words);
 static void *coalesce(void *ptr);
-static void *first_fit(size_t asize);
-static void *next_fit(size_t asize);
-static void *best_fit(size_t asize);
+// static void *first_fit(size_t asize);
+// static void *next_fit(size_t asize);
+// static void *best_fit(size_t asize);
+static void *find_fit(size_t asize); // empilcit find_fit
 static void place(void *ptr, size_t asize);
 
-static char *heap_listp; // 항상 prologue 블록을 가리킨다.
-static void *nextptr;
+static char *heap_listp; 
+// static void *nextptr;
+
+/* Pointer for Explicit list */
+#define PREV_PTR(ptr)   (*(char **)(ptr)) 
+#define NEXT_PTR(ptr)   (*((char **)(ptr) + WSIZE))
+
+/* For free list */
+static char* freeListPtr;
+static void free_list_add(void* ptr);
+static void free_list_delete(void* ptr);
 
 /* 
  * mm_init - initialize the malloc package. 힙 초기화
  */
 int mm_init(void)
 {
-    if ((heap_listp = mem_sbrk(4*WSIZE)) == (void *)-1)
+    if ((heap_listp = mem_sbrk(8*WSIZE)) == (void *)-1)
         return -1;
-    PUT(heap_listp, 0);                          /* Alignemt padding */
-    PUT(heap_listp + (1*WSIZE), PACK(DSIZE, 1)); /* Prologue header -PACK(block size, alloc)*/
-    PUT(heap_listp + (2*WSIZE), PACK(DSIZE, 1)); /* Prologue footer -PACK(block size, alloc)*/
-    PUT(heap_listp + (3*WSIZE), PACK(0, 1));     /* Epilogue header -end*/
-    heap_listp += (2*WSIZE);
-    nextptr = heap_listp; // next-fit 구현
+    PUT(heap_listp, 0);                             /* Alignemt padding */
+    PUT(heap_listp + (1*WSIZE), PACK(DSIZE, 1));    /* Prologue header -PACK(block size, alloc)*/
+    PUT(heap_listp + (2*WSIZE), PACK(DSIZE, 1));    /* Prologue footer -PACK(block size, alloc)*/
+    PUT(heap_listp + (3*WSIZE), PACK(2*DSIZE, 0));  /* First Free block header */
+    PUT(heap_listp + (4*WSIZE), NULL);              /* Pred */
+    PUT(heap_listp + (5*WSIZE), NULL);              /* Succ */
+    PUT(heap_listp + (6*WSIZE), PACK(2*DSIZE, 0));  /* First Free block footer */    
+    PUT(heap_listp + (7*WSIZE), PACK(0, 1));        /* Epilogue header -end*/
+    heap_listp += (4*WSIZE);  // 첫 데이터 영역을 가리킴
+    
+    freeListPtr = heap_listp; // free 연결리스트
 
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL)
         return -1;
@@ -133,7 +148,7 @@ void *mm_malloc(size_t size)
     else
         asize = DSIZE * ((size + (DSIZE) + (DSIZE-1)) / DSIZE); 
     
-    if ((ptr = next_fit(asize)) != NULL) {
+    if ((ptr = find_fit(asize)) != NULL) {
         place(ptr, asize); /* 요청 블록 배치 */
         return ptr;
     }
@@ -164,78 +179,97 @@ static void *coalesce(void *ptr) // 가용 메모리 연결
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(ptr)));
     size_t size = GET_SIZE(HDRP(ptr));
 
-    if (prev_alloc && next_alloc) // case1. 이전과 다음이 모두 할당
+    if (prev_alloc && next_alloc) { // case1. 이전과 다음이 모두 할당
+        free_list_add(ptr);
         return ptr;
+    }
     else if (prev_alloc && !next_alloc) { // case2. 이전만 할당
+        free_list_delete(NEXT_PTR(ptr));
         size += GET_SIZE(HDRP(NEXT_BLKP(ptr))); // 다음 리스트랑 연결
         PUT(HDRP(ptr), PACK(size, 0)); // header의 블록 사이즈 변경 + 가용 블록 명시
         PUT(FTRP(ptr), PACK(size, 0)); // footer의 블록 사이즈 변경
     }
     else if (!prev_alloc && next_alloc) { // case3. 다음만 할당
+        free_list_delete(PREV_PTR(ptr));
         size += GET_SIZE(HDRP(PREV_BLKP(ptr))); // 이전 리스트랑 연결
-        PUT(FTRP(ptr), PACK(size, 0));
         PUT(HDRP(PREV_BLKP(ptr)), PACK(size, 0));
+        PUT(FTRP(ptr), PACK(size, 0));
         ptr = PREV_BLKP(ptr); // 지금 ptr을 이전 리스트 시작으로 변경
     }
     else { // case4. 이전과 다음이 모두 가용
+        free_list_delete(PREV_PTR(ptr));
+        free_list_delete(NEXT_PTR(ptr));
         size += GET_SIZE(HDRP(PREV_BLKP(ptr))) + GET_SIZE(FTRP(NEXT_BLKP(ptr)));
         PUT(HDRP(PREV_BLKP(ptr)), PACK(size, 0));
         PUT(FTRP(NEXT_BLKP(ptr)), PACK(size, 0));
         ptr = PREV_BLKP(ptr);
     }
-    nextptr = ptr;
+    free_list_add(ptr);
     return ptr;
 }
 
-static void *first_fit(size_t asize) 
+// static void *first_fit(size_t asize) 
+// {
+//     void *ptr;
+//     for (ptr = heap_listp; GET_SIZE(HDRP(ptr)) > 0; ptr = NEXT_BLKP(ptr)) {
+//         if (!GET_ALLOC(HDRP(ptr)) && (asize <= GET_SIZE(HDRP(ptr)))) {
+//             return ptr;
+//         }
+//     }
+//     return NULL;
+// }
+
+// static void *next_fit(size_t asize) 
+// {
+//     void *ptr;
+//     for (ptr = nextptr; GET_SIZE(HDRP(ptr)) > 0; ptr = NEXT_BLKP(ptr)) {
+//         if (!GET_ALLOC(HDRP(ptr)) && (asize <= GET_SIZE(HDRP(ptr)))) {
+//             nextptr = ptr;
+//             return ptr;
+//         }
+//     }
+
+//     ptr = heap_listp; // epilogue를 만나면 다시 처음부터 탐색
+//     while (ptr < nextptr) {
+//         ptr = NEXT_BLKP(ptr);
+//         if (!GET_ALLOC(HDRP(ptr)) && (asize <= GET_SIZE(HDRP(ptr)))) {
+//             nextptr = ptr;
+//             return ptr;
+//         }
+//     }
+//     return NULL;
+// }
+
+// static void *best_fit(size_t asize) 
+// {
+//     void *ptr;
+//     void *fitptr = NULL;
+//     for (ptr = heap_listp; GET_SIZE(HDRP(ptr)) > 0; ptr = NEXT_BLKP(ptr)) {
+//         if (!GET_ALLOC(HDRP(ptr)) &&(asize <= GET_SIZE(HDRP(ptr)))) {
+//             if (fitptr == NULL)
+//                 fitptr = ptr;
+//             else
+//                 fitptr = GET_SIZE(ptr) < GET_SIZE(fitptr) ? ptr : fitptr;
+//         }
+//     }
+//     return fitptr;
+// }
+
+static void *find_fit(size_t asize)
 {
-    void *ptr;
-    for (ptr = heap_listp; GET_SIZE(HDRP(ptr)) > 0; ptr = NEXT_BLKP(ptr)) {
-        if (!GET_ALLOC(HDRP(ptr)) && (asize <= GET_SIZE(HDRP(ptr)))) {
+    // emplicit의 find_fit -> heap 전체를 탐색하지 않고 가용 리스트만 확인
+    void *ptr = freeListPtr;
+    while (ptr != NULL) {
+        if (asize <= GET_SIZE(HDRP(ptr)))
             return ptr;
-        }
+        ptr = NEXT_PTR(ptr);
     }
     return NULL;
-}
-
-static void *next_fit(size_t asize) 
-{
-    void *ptr;
-    for (ptr = nextptr; GET_SIZE(HDRP(ptr)) > 0; ptr = NEXT_BLKP(ptr)) {
-        if (!GET_ALLOC(HDRP(ptr)) && (asize <= GET_SIZE(HDRP(ptr)))) {
-            nextptr = ptr;
-            return ptr;
-        }
-    }
-
-    ptr = heap_listp; // epilogue를 만나면 다시 처음부터 탐색
-    while (ptr < nextptr) {
-        ptr = NEXT_BLKP(ptr);
-        if (!GET_ALLOC(HDRP(ptr)) && (asize <= GET_SIZE(HDRP(ptr)))) {
-            nextptr = ptr;
-            return ptr;
-        }
-    }
-    return NULL;
-}
-
-static void *best_fit(size_t asize) 
-{
-    void *ptr;
-    void *fitptr = NULL;
-    for (ptr = heap_listp; GET_SIZE(HDRP(ptr)) > 0; ptr = NEXT_BLKP(ptr)) {
-        if (!GET_ALLOC(HDRP(ptr)) &&(asize <= GET_SIZE(HDRP(ptr)))) {
-            if (fitptr == NULL)
-                fitptr = ptr;
-            else
-                fitptr = GET_SIZE(ptr) < GET_SIZE(fitptr) ? ptr : fitptr;
-        }
-    }
-    return fitptr;
 }
 
 static void place(void * ptr, size_t asize)
 {
+    free_list_delete(ptr);
     size_t csize = GET_SIZE(HDRP(ptr)); /* 현재 가용 블록의 크기 */
 
     if ((csize - asize) >= (2*DSIZE)) { /* 남은 공간이 최소 블록 크기 이상일 때 */
@@ -244,6 +278,7 @@ static void place(void * ptr, size_t asize)
         ptr = NEXT_BLKP(ptr);
         PUT(HDRP(ptr), PACK(csize-asize, 0)); /* 분할 */
         PUT(FTRP(ptr), PACK(csize-asize, 0));
+        free_list_add(ptr);
     }
     else {
         PUT(HDRP(ptr), PACK(csize, 1));
@@ -269,4 +304,46 @@ void *mm_realloc(void *ptr, size_t size)
     memcpy(newptr, oldptr, copySize);
     mm_free(oldptr);
     return newptr;
+}
+
+/* free한 블록을 가용 연결리스트에 추가 */
+static void free_list_add(void* ptr) 
+{
+    /* LIFO */
+    NEXT_PTR(ptr) = freeListPtr;
+    if (freeListPtr != NULL)
+        NEXT_PTR(PREV_PTR(ptr)) = NEXT_PTR(ptr);
+    freeListPtr = ptr;
+}
+
+/* malloc한 블록을 가용 연결리스트에서 삭제 */
+static void free_list_delete(void* ptr) 
+{
+    // 방법1
+    // 삭제할 블럭이 시작점
+    // if (ptr == freeListPtr) {
+    //     freeListPtr = NEXT_PTR(ptr);
+    //     return;
+    // }
+    // 삭제할 블럭이 끝점
+    // else if (NEXT_PTR(ptr) == NULL) {
+    //     NEXT_PTR(PREV_PTR(ptr)) = NULL;
+    //     return;
+    // }
+    // 삭제할 블럭이 중간
+    // else {
+    //     NEXT_PTR(PREV_PTR(ptr)) = NEXT_PTR(ptr);
+    //     PREV_PTR(NEXT_PTR(ptr)) = PREV_PTR(ptr);
+    // }
+
+    // 방법2
+    // 삭제할 블럭 앞에 블럭 없음
+    if (ptr == freeListPtr) {
+        freeListPtr = NEXT_PTR(ptr);
+        return;
+    }
+    // 삭제할 블럭 앞에 블럭 있음
+    NEXT_PTR(PREV_PTR(ptr)) = NEXT_PTR(ptr);
+    if (NEXT_PTR(ptr) != NULL)
+        PREV_PTR(NEXT_PTR(ptr)) = PREV_PTR(ptr);
 }
