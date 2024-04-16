@@ -232,19 +232,38 @@ static void place(void * bp, size_t asize)
  */
 void *mm_realloc(void *ptr, size_t size)
 {
-    void *oldptr = ptr;
     void *newptr;
-    size_t copySize;
+    size_t old_size, new_size;
+
+    if ((int)size <= 0) {
+        free(ptr);
+        return NULL;
+    }
+    if (ptr == NULL)
+		return (mm_malloc(size));
     
-    newptr = mm_malloc(size);
-    if (newptr == NULL)
-      return NULL;
-    copySize = GET_SIZE(HDRP(oldptr)) - DSIZE;  
-    if (size < copySize)
-      copySize = size;
-    memcpy(newptr, oldptr, copySize);
-    mm_free(oldptr);
-    return newptr;
+    old_size = GET_SIZE(HDRP(ptr));
+    new_size = size + (2*WSIZE);
+    if (new_size <= old_size)
+        return ptr;
+    
+    size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(ptr)));
+    size_t next_size = GET_SIZE(HDRP(NEXT_BLKP(ptr)));
+    size_t total_size = old_size + next_size;
+    if (!next_alloc && new_size <= total_size) {
+        free_list_delete(NEXT_BLKP(ptr));
+        PUT(HDRP(ptr), PACK(total_size, 1));
+        PUT(FTRP(ptr), PACK(total_size, 1));
+        return ptr;
+    }
+    else {
+        newptr = mm_malloc(new_size);
+        if (newptr == NULL)
+            return NULL;
+        memcpy(newptr, ptr, old_size);
+        mm_free(ptr);
+        return newptr;
+    }
 }
 
 static void free_list_add(void* bp) 
