@@ -40,7 +40,7 @@ team_t team = {
 
 #define WSIZE       4       /* Word and header/footer size */
 #define DSIZE       8       /* Double word */
-#define CHUNKSIZE   (1<<8) /* Extend heap by this amount -mem_brk를 가지고 CHUNKSIZE만큼 힙 영역을 늘림*/
+#define CHUNKSIZE   (1<<12) /* Extend heap by this amount -mem_brk를 가지고 CHUNKSIZE만큼 힙 영역을 늘림*/
 
 #define MAX(x, y)   ((x) > (y) ? (x) : (y))
 
@@ -197,13 +197,20 @@ static void *find_fit(size_t asize)
 {
     int size_class = get_seg_list_class(asize);
     void *bp;
+    void *tmp = NULL;
     while (size_class < SEG_MAX) {
         bp = GET_ROOT(size_class);
         while (bp != NULL) {
-            if (asize <= GET_SIZE(HDRP(bp))) 
-                return bp;
+            if (asize <= GET_SIZE(HDRP(bp))) {
+                if (tmp == NULL)
+                    tmp = bp;
+                else 
+                    tmp = GET_SIZE(HDRP(bp)) < GET_SIZE(HDRP(tmp)) ? bp : tmp;
+            }
             bp = NEXT_FREE_BLK(bp);
         }
+        if (tmp != NULL)
+            return tmp;
         size_class++;
     }
     return NULL;
