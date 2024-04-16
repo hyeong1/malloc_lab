@@ -27,7 +27,7 @@ team_t team = {
     /* Team name */
     "team_6",
     /* First member's full name */
-    "Minhyeong Lee",
+    "이민형, 권지현, 진재혁 ",
     /* First member's email address */
     "mi75625@gmail.com",
     /* Second member's full name (leave blank if none) */
