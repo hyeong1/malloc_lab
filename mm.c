@@ -67,7 +67,8 @@ team_t team = {
 #define PREV_FREE_BLK(ptr)   (*(char **)(ptr)) 
 #define NEXT_FREE_BLK(ptr)   (*(char **)(ptr + WSIZE))
 
-#define SEG_MAX 29 /* 2^4 ~ 2^32(최대 블록 크기 16바이트(4*word)) */
+#define SEG_MAX 12 /* 2의 제곱수 크기만 */
+#define GET_ROOT(class) (*(void **)((char *)(free_listp) + (WSIZE * class)))
 
 static void *extend_heap(size_t words);
 static void *coalesce(void *bp);
@@ -75,43 +76,35 @@ static void *find_fit(size_t asize);
 static void place(void *bp, size_t asize);
 static void free_list_add(void* bp);
 static void free_list_delete(void* bp);
-static int get_seg_list_root(size_t size);
+static int get_seg_list_class(size_t size);
 
 static char *free_listp = 0;
-static void *seg_list[SEG_MAX];
 
 /* 
  * mm_init - initialize the malloc package. 힙 초기화
  */
 int mm_init(void)
 {
-    /* Init Seglist */
+    if ((free_listp = mem_sbrk((SEG_MAX + 4) * WSIZE)) == (void *)-1) 
+        return -1;
+    PUT(free_listp, 0);
+    PUT(free_listp + (1 * WSIZE), PACK((SEG_MAX + 2) * WSIZE, 1));
     for (int i = 0; i < SEG_MAX; i++)
-        seg_list[i] = NULL;
-
-    if ((free_listp = mem_sbrk(4 * WSIZE)) == (void *)-1)
+        PUT(free_listp + ((2 + i) * WSIZE), NULL);
+    PUT(free_listp + ((SEG_MAX + 2) * WSIZE), PACK((SEG_MAX + 2) * WSIZE, 1)); 
+    PUT(free_listp + ((SEG_MAX + 3) * WSIZE), PACK(0, 1)); 
+    free_listp += (2 * WSIZE);
+    
+    if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
         return -1;
-
-    PUT(free_listp, 0);                                /* Alignment padding -heap의 시작점 */
-    PUT(free_listp + (1 * WSIZE), PACK(DSIZE, 1));     /* 프롤로그 header */
-    PUT(free_listp + (2 * WSIZE), PACK(DSIZE, 1));     /* 프롤로그 footer */
-    PUT(free_listp + (3 * WSIZE), PACK(0, 1));         /* 에필로그 header */
-    free_listp += (2*WSIZE);
-
-    /* Extend the empty heap with a free block of CHUNKSIZE bytes */
-    if (extend_heap(CHUNKSIZE / WSIZE) == NULL) /* 최대 할당 크기를 넘었을 때 */
-        return -1;
-  
     return 0;
 }
 
 static void *extend_heap(size_t words)
 {
     char *bp;
-    size_t size;
+    size_t size = (words % 2) ? (words + 1) * WSIZE : words * WSIZE;
 
-    /* Allocate an even number of words to maintain alignmnet */
-    size = (words % 2) ? (words + 1) * WSIZE : words * WSIZE;
     if ((long)(bp = mem_sbrk(size)) == (void*)-1)
         return NULL;
 
@@ -138,7 +131,7 @@ void *mm_malloc(size_t size)
         return NULL;
 
     /* Adjust block size to include overhead and alignmnet reqs. */
-    if (size < DSIZE)
+    if (size <= DSIZE)
         asize = 2 * DSIZE;
     else
         asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
@@ -178,22 +171,22 @@ static void *coalesce(void *bp)
     if(prev_alloc && !next_alloc){
         free_list_delete(NEXT_BLKP(bp)); 
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
-        PUT(HDRP(bp), PACK(size,0));
-        PUT(FTRP(bp), PACK(size,0));
+        PUT(HDRP(bp), PACK(size, 0));
+        PUT(FTRP(bp), PACK(size, 0));
     }
     else if(!prev_alloc && next_alloc){
         free_list_delete(PREV_BLKP(bp));
         size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-        PUT(HDRP(PREV_BLKP(bp)), PACK(size,0));
-        PUT(FTRP(bp), PACK(size,0));
+        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+        PUT(FTRP(bp), PACK(size, 0));
         bp = PREV_BLKP(bp);
     }
     else if(!prev_alloc && !next_alloc){
         free_list_delete(PREV_BLKP(bp));
         free_list_delete(NEXT_BLKP(bp));
         size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
-        PUT(HDRP(PREV_BLKP(bp)), PACK(size,0));
-        PUT(FTRP(NEXT_BLKP(bp)), PACK(size,0));
+        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+        PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
         bp = PREV_BLKP(bp); 
     }
     free_list_add(bp); 
@@ -202,23 +195,16 @@ static void *coalesce(void *bp)
 
 static void *find_fit(size_t asize)
 {
+    int size_class = get_seg_list_class(asize);
     void *bp;
-    int idx = get_seg_list_root(asize);
-    /* First fit */
-    void *tmp = NULL;
-    while (idx < SEG_MAX) {
-        for (bp = seg_list[idx]; bp != NULL; bp = NEXT_FREE_BLK(bp)) {
-            if (asize <= GET_SIZE(HDRP(bp))) {
-                if (tmp == NULL)
-                    tmp = bp;
-                else {
-                    tmp = GET_SIZE(HDRP(bp)) < GET_SIZE(HDRP(tmp)) ? bp : tmp;
-                }
-            }
+    while (size_class < SEG_MAX) {
+        bp = GET_ROOT(size_class);
+        while (bp != NULL) {
+            if (asize <= GET_SIZE(HDRP(bp))) 
+                return bp;
+            bp = NEXT_FREE_BLK(bp);
         }
-        if (tmp != NULL)
-            return tmp;
-        idx++;
+        size_class++;
     }
     return NULL;
 }
@@ -228,16 +214,16 @@ static void place(void * bp, size_t asize)
     size_t csize = GET_SIZE(HDRP(bp));
     free_list_delete(bp);
     if ((csize - asize) >= (2*DSIZE)){
-        PUT(HDRP(bp), PACK(asize,1)); 
-        PUT(FTRP(bp), PACK(asize,1));
+        PUT(HDRP(bp), PACK(asize, 1)); 
+        PUT(FTRP(bp), PACK(asize, 1));
         bp = NEXT_BLKP(bp);
-        PUT(HDRP(bp), PACK(csize-asize,0));
-        PUT(FTRP(bp), PACK(csize-asize,0));
+        PUT(HDRP(bp), PACK(csize - asize, 0));
+        PUT(FTRP(bp), PACK(csize  -asize, 0));
         free_list_add(bp); 
     }
     else{
-        PUT(HDRP(bp), PACK(csize,1));
-        PUT(FTRP(bp), PACK(csize,1));
+        PUT(HDRP(bp), PACK(csize, 1));
+        PUT(FTRP(bp), PACK(csize, 1));
     }
 }
 
@@ -253,7 +239,7 @@ void *mm_realloc(void *ptr, size_t size)
     newptr = mm_malloc(size);
     if (newptr == NULL)
       return NULL;
-    copySize = GET_SIZE(HDRP(oldptr));  
+    copySize = GET_SIZE(HDRP(oldptr)) - DSIZE;  
     if (size < copySize)
       copySize = size;
     memcpy(newptr, oldptr, copySize);
@@ -263,48 +249,35 @@ void *mm_realloc(void *ptr, size_t size)
 
 static void free_list_add(void* bp) 
 {
-    int seg_idx = get_seg_list_root(GET_SIZE(HDRP(bp))); /* 추가할 size class 찾기 */
-    /* LIFO */
-    if (seg_list[seg_idx] == NULL) {
-        PREV_FREE_BLK(bp) = NULL;
-        NEXT_FREE_BLK(bp) = NULL;
-    }
-    else {
-        PREV_FREE_BLK(bp) = NULL;
-        NEXT_FREE_BLK(bp) = seg_list[seg_idx];
-        PREV_FREE_BLK(seg_list[seg_idx]) = bp;
-    }
-    seg_list[seg_idx] = bp;
+    int size_class = get_seg_list_class(GET_SIZE(HDRP(bp))); /* 추가할 size class 찾기 */
+    NEXT_FREE_BLK(bp) = GET_ROOT(size_class);
+    if (GET_ROOT(size_class) != NULL) 
+        PREV_FREE_BLK(GET_ROOT(size_class)) = bp;
+    GET_ROOT(size_class) = bp;
 }
 
 static void free_list_delete(void* bp) 
 {
-    int seg_idx = get_seg_list_root(GET_SIZE(HDRP(bp))); /* 추가할 size class 찾기 */
-    if (PREV_FREE_BLK(bp) == NULL) {
-        if (NEXT_FREE_BLK(bp) == NULL) /* 리스트에 한 블록만 존재 */
-            seg_list[seg_idx] = NULL;
-        else {
-            PREV_FREE_BLK(NEXT_FREE_BLK(bp)) = NULL;
-            seg_list[seg_idx] = NEXT_FREE_BLK(bp);
-        }
+    int class = get_seg_list_class(GET_SIZE(HDRP(bp)));
+    if (bp == GET_ROOT(class)) {
+        GET_ROOT(class) = NEXT_FREE_BLK(GET_ROOT(class)); 
+        return;
     }
-    else {
-        if (NEXT_FREE_BLK(bp) == NULL) 
-            NEXT_FREE_BLK(PREV_FREE_BLK(bp)) = NULL;
-        else {
-            NEXT_FREE_BLK(PREV_FREE_BLK(bp)) = NEXT_FREE_BLK(bp);
-            PREV_FREE_BLK(NEXT_FREE_BLK(bp)) = PREV_FREE_BLK(bp);
-        }
-    }
+    NEXT_FREE_BLK(PREV_FREE_BLK(bp)) = NEXT_FREE_BLK(bp);
+    if (NEXT_FREE_BLK(bp) != NULL) 
+        PREV_FREE_BLK(NEXT_FREE_BLK(bp)) = PREV_FREE_BLK(bp);
 }
 
 /* seg_list의 인덱스를 찾는 함수 */
-static int get_seg_list_root(size_t size)
+static int get_seg_list_class(size_t size)
 {
-    int idx = 0;
+    int class = 0;
     while (size > 16) {
         size = (size >> 1);
-        idx++;
+        class++;
     }
-    return idx;
+
+    if (class >= SEG_MAX)
+        return SEG_MAX - 1;
+    return class;
 }
