@@ -49,10 +49,10 @@ team_t team = {
 
 /* Read and write a word at address p */
 #define GET(ptr)          (*(unsigned int *)(ptr))
-#define PUT(ptr, val)      (*(unsigned long *)(ptr) = (val))
+#define PUT(ptr, val)      (*(unsigned int *)(ptr) = (val))
 
 /* Read the size and allocated fields from address p */
-#define GET_SIZE(ptr)     (GET(ptr) & ~0x7) /* Check size -하위 3비트 제외*/
+#define GET_SIZE(ptr)     (GET(ptr) & ~0x7) /* Check size */
 #define GET_ALLOC(ptr)    (GET(ptr) & 0x1)  /* Check allocated */
 
 /* Compute address of bp's header and footer */
@@ -61,13 +61,12 @@ team_t team = {
 
 /* Compute address of next and previous blocks */
 #define NEXT_BLKP(ptr)   ((char *)(ptr) + GET_SIZE(HDRP(ptr)))
-#define PREV_BLKP(ptr)   ((char *)(ptr) - GET_SIZE(((char *)(ptr) - DSIZE))) /* - (이전 블록+지금 블록 크기) == Double word */
+#define PREV_BLKP(ptr)   ((char *)(ptr) - GET_SIZE(((char *)(ptr) - DSIZE))) 
 
-/* Pointer for Explicit list */
-#define PREV_FREE_BLK(ptr)   (*(char **)(ptr)) 
 #define NEXT_FREE_BLK(ptr)   (*(char **)(ptr + WSIZE))
+#define PREV_FREE_BLK(ptr)   (*(char **)(ptr)) 
 
-#define SEG_MAX 12 /* 2의 제곱수 크기만 */
+#define SEG_MAX 12 /* size class는 2의 제곱수 크기만 */
 #define GET_ROOT(class) (*(void **)((char *)(free_listp) + (WSIZE * class)))
 
 static void *extend_heap(size_t words);
@@ -94,7 +93,9 @@ int mm_init(void)
     PUT(free_listp + ((SEG_MAX + 2) * WSIZE), PACK((SEG_MAX + 2) * WSIZE, 1)); 
     PUT(free_listp + ((SEG_MAX + 3) * WSIZE), PACK(0, 1)); 
     free_listp += (2 * WSIZE);
-    
+
+    if (extend_heap(4) == NULL)
+        return -1;
     if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
         return -1;
     return 0;
@@ -112,7 +113,6 @@ static void *extend_heap(size_t words)
     PUT(FTRP(bp), PACK(size, 0));         /* Free block footer  */
     PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1)); /* New epilogue header */
 
-    /*Coalesce if the previous block was free */
     return coalesce(bp);
 }
 
@@ -126,11 +126,9 @@ void *mm_malloc(size_t size)
     size_t extendsize;
     char *bp;
 
-    /* Ignore spurious requests */
     if (size == 0)
         return NULL;
 
-    /* Adjust block size to include overhead and alignmnet reqs. */
     if (size <= DSIZE)
         asize = 2 * DSIZE;
     else
@@ -168,7 +166,7 @@ static void *coalesce(void *bp)
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp))); 
     size_t size = GET_SIZE(HDRP(bp)); 
 
-    if(prev_alloc && !next_alloc){
+    if(prev_alloc && !next_alloc){ 
         free_list_delete(NEXT_BLKP(bp)); 
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
         PUT(HDRP(bp), PACK(size, 0));
@@ -193,21 +191,20 @@ static void *coalesce(void *bp)
     return bp;
 }
 
+/* Best fit */
 static void *find_fit(size_t asize)
 {
     int size_class = get_seg_list_class(asize);
     void *bp;
     void *tmp = NULL;
     while (size_class < SEG_MAX) {
-        bp = GET_ROOT(size_class);
-        while (bp != NULL) {
+        for (bp = GET_ROOT(size_class); bp != NULL; bp = NEXT_FREE_BLK(bp)) {
             if (asize <= GET_SIZE(HDRP(bp))) {
                 if (tmp == NULL)
                     tmp = bp;
                 else 
                     tmp = GET_SIZE(HDRP(bp)) < GET_SIZE(HDRP(tmp)) ? bp : tmp;
             }
-            bp = NEXT_FREE_BLK(bp);
         }
         if (tmp != NULL)
             return tmp;
@@ -220,9 +217,11 @@ static void place(void * bp, size_t asize)
 {
     size_t csize = GET_SIZE(HDRP(bp));
     free_list_delete(bp);
+
     if ((csize - asize) >= (2*DSIZE)){
         PUT(HDRP(bp), PACK(asize, 1)); 
         PUT(FTRP(bp), PACK(asize, 1));
+        /* 분할 */
         bp = NEXT_BLKP(bp);
         PUT(HDRP(bp), PACK(csize - asize, 0));
         PUT(FTRP(bp), PACK(csize  -asize, 0));
@@ -250,10 +249,11 @@ void *mm_realloc(void *ptr, size_t size)
 		return (mm_malloc(size));
     
     old_size = GET_SIZE(HDRP(ptr));
-    new_size = size + (2*WSIZE);
+    new_size = size + (2*WSIZE); /* + Header, footer */ 
     if (new_size <= old_size)
         return ptr;
     
+    /* Check next block */
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(ptr)));
     size_t next_size = GET_SIZE(HDRP(NEXT_BLKP(ptr)));
     size_t total_size = old_size + next_size;
@@ -275,7 +275,7 @@ void *mm_realloc(void *ptr, size_t size)
 
 static void free_list_add(void* bp) 
 {
-    int size_class = get_seg_list_class(GET_SIZE(HDRP(bp))); /* 추가할 size class 찾기 */
+    int size_class = get_seg_list_class(GET_SIZE(HDRP(bp))); /* Find size class */
     NEXT_FREE_BLK(bp) = GET_ROOT(size_class);
     if (GET_ROOT(size_class) != NULL) 
         PREV_FREE_BLK(GET_ROOT(size_class)) = bp;
@@ -294,7 +294,7 @@ static void free_list_delete(void* bp)
         PREV_FREE_BLK(NEXT_FREE_BLK(bp)) = PREV_FREE_BLK(bp);
 }
 
-/* seg_list의 인덱스를 찾는 함수 */
+/* Find size class idx */
 static int get_seg_list_class(size_t size)
 {
     int class = 0;
